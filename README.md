@@ -1,76 +1,101 @@
-# Notification System (Scalable Design)
+# Scalable Notification System
 
-## Overview
+A high-performance, fault-tolerant notification system designed to deliver **100M+ notifications per day** across multiple channels including push, email, and in-app messaging.
 
-This project describes a notification system designed to handle
-large-scale message delivery across multiple channels such as in-app
-notifications, push alerts, and email.
+---
 
-The system focuses on reliability, scalability, and async processing so
-that user-facing APIs stay fast even under heavy load.
+## 🚀 Overview
 
-------------------------------------------------------------------------
+Modern applications require real-time, reliable notification delivery at scale. This system is built to handle massive traffic while keeping APIs fast, decoupled, and resilient under failure.
 
-## High-Level Architecture
+Key design goals:
 
-    Client Apps
-       ↓
-    API Layer (Authentication + Validation)
-       ↓
-    Message Dispatcher Service
-       ↓
-    Message Queue (Kafka / Redis Streams)
-       ↓
-    Background Workers
-       ├── In-App Worker
-       ├── Push Worker
-       └── Email Worker
-       ↓
-    External Providers (FCM, APNs, SMTP)
-       ↓
-    Database + Cache Layer
+* High throughput (100M+ notifications/day)
+* Low API latency
+* Horizontal scalability
+* Fault tolerance and retry safety
+* Multi-channel delivery (Push, Email, In-App)
 
-------------------------------------------------------------------------
+---
 
-## Core Components
+## 🧠 High-Level Architecture
+
+```
+Client Apps
+   ↓
+API Layer (Auth + Validation)
+   ↓
+Dispatcher Service
+   ↓
+Message Queue (Kafka / Redis Streams)
+   ↓
+Background Workers
+   ├── Push Worker (FCM / APNs)
+   ├── Email Worker (SMTP / Providers)
+   └── In-App Worker (DB storage)
+   ↓
+Database + Cache Layer
+```
+
+---
+
+## ⚙️ Core Components
 
 ### 1. API Layer
 
-Handles incoming requests from backend services or user actions.\
-Responsibilities: - Input validation - Rate limiting - User preference
-check - Sending tasks to queue
+Handles incoming requests from client apps or backend services.
 
-------------------------------------------------------------------------
+Responsibilities:
+
+* Input validation
+* Rate limiting
+* User preference checks
+* Publishing events to queue
+
+---
 
 ### 2. Dispatcher Service
 
-Acts as the brain of the system: - Determines which channels to use -
-Applies deduplication rules - Publishes events into message queues
+The decision engine of the system.
 
-------------------------------------------------------------------------
+Responsibilities:
+
+* Determines delivery channels
+* Applies deduplication rules
+* Enriches notification payload
+* Publishes events to message queue
+
+---
 
 ### 3. Message Queue
 
-Used for async processing: - Decouples API from delivery - Buffers
-traffic spikes - Enables retry mechanisms
+Ensures asynchronous and reliable processing.
 
-------------------------------------------------------------------------
+Benefits:
+
+* Decouples API from workers
+* Handles traffic spikes gracefully
+* Enables retries and backpressure control
+
+---
 
 ### 4. Workers
 
-Separate workers for each channel: - Push Worker → mobile
-notifications - Email Worker → email delivery - In-App Worker → stores
-notifications in DB
+Specialized consumers for each channel:
 
-------------------------------------------------------------------------
+* **Push Worker** → Mobile notifications via FCM/APNs
+* **Email Worker** → Email delivery via SMTP providers
+* **In-App Worker** → Stores notifications in database
 
-## API Endpoints
+---
+
+## 🌐 API Endpoints
 
 ### Create Notification
 
-**POST /notifications**
+`POST /notifications`
 
-``` json
+```json
 {
   "user_id": "123",
   "event": "comment_added",
@@ -81,114 +106,214 @@ notifications in DB
 
 Response:
 
-``` json
+```json
 {
   "status": "queued",
   "id": "notif_001"
 }
 ```
 
-------------------------------------------------------------------------
+---
 
 ### Get Notifications
 
-**GET /users/{id}/notifications**
+`GET /users/{id}/notifications`
 
-Returns paginated list of notifications for UI display.
+Returns paginated notifications for UI display.
 
-------------------------------------------------------------------------
+---
 
 ### Update Preferences
 
-**PUT /users/{id}/preferences**
+`PUT /users/{id}/preferences`
 
-Allows users to enable/disable channels and configure quiet hours.
+Allows users to configure:
 
-------------------------------------------------------------------------
+* Enabled channels
+* Quiet hours
+* Notification categories
 
-## Data Storage
+---
 
-### Notifications Table
+## 🗄️ Data Storage Design
 
-Stores in-app notifications and history: - id - user_id - message -
-type - status - created_at
+### Notifications Table (PostgreSQL)
 
-Indexes: - user_id + created_at (fast feed loading)
+```sql
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  channel VARCHAR(50) NOT NULL,
+  status VARCHAR(20) DEFAULT 'pending',
+  priority SMALLINT DEFAULT 1,
+  metadata JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  delivered_at TIMESTAMP WITH TIME ZONE,
+  read_at TIMESTAMP WITH TIME ZONE
+);
+```
 
-------------------------------------------------------------------------
+### Indexes
+
+```sql
+CREATE INDEX idx_notifications_user_created
+ON notifications(user_id, created_at DESC);
+
+CREATE INDEX idx_notifications_status
+ON notifications(status) WHERE status != 'sent';
+
+CREATE INDEX idx_notifications_priority
+ON notifications(priority, created_at) WHERE priority > 2;
+```
+
+---
+
+## ⚡ Caching Layer (Redis)
 
 ### User Preferences Cache
 
-Stored in Redis: - notification settings - rate limiting counters -
-deduplication keys
+Key: `user_prefs:{user_id}`
 
-------------------------------------------------------------------------
+```json
+{
+  "channels": {
+    "push": true,
+    "email": false,
+    "in_app": true
+  },
+  "quiet_hours": {
+    "start": "22:00",
+    "end": "08:00",
+    "timezone": "UTC"
+  }
+}
+```
 
-## Scaling Approach
+TTL: 24 hours
+
+---
+
+### Deduplication Store
+
+Key: `dedup:{user_id}:{event_hash}`
+
+Purpose:
+
+* Prevent duplicate notifications
+* Enforce idempotency
+
+TTL: 1 hour
+
+---
+
+## 📈 Scaling Strategy
 
 ### Horizontal Scaling
 
--   API servers are stateless → can scale freely
--   Workers scaled independently per channel
+* API layer is stateless → fully scalable
+* Workers scale independently per channel
+
+---
 
 ### Partitioning
 
--   Messages distributed across queue partitions
--   Each worker group consumes independently
+* Queue partitions distribute load
+* Workers consume independently
 
-### Database Strategy
+---
 
--   Read-heavy system → read replicas used
--   Partitioning by user_id for large datasets
+### Database Scaling
 
-------------------------------------------------------------------------
+* Read replicas for heavy read traffic
+* Partitioning by `user_id`
 
-## Reliability Strategy
+---
+
+### Sharding Strategy
+
+**Shard Key:** `user_id (hashed)`
+
+```text
+hash(user_id) % 256 → shard_id
+```
+
+* 256 virtual shards mapped to physical nodes
+* Each shard ~78K users
+* Each shard handles ~390K writes/day
+
+Benefits:
+
+* Even distribution
+* Easy scaling
+* Hot-user isolation support
+
+---
+
+## 🔁 Reliability Strategy
 
 ### Retry Policy
 
-If delivery fails: - Retry with increasing delay - After max attempts →
-move to failed queue
+* Exponential backoff retries
+* Max retry attempts before failure queue
 
-### Deduplication
-
-Prevent duplicate notifications using: - Redis keys with expiration -
-Idempotency checks in worker
+---
 
 ### Failure Handling
 
--   Queue failure → messages preserved
--   Worker crash → automatic reprocessing
--   External service failure → retry + fallback
+* Queue ensures message durability
+* Workers auto-recover on crash
+* External API failures handled with retry + fallback
 
-------------------------------------------------------------------------
+---
 
-## Trade-offs
+### Deduplication
+
+* Redis-based idempotency keys
+* Worker-level duplicate checks
+
+---
+
+## ⚖️ Design Trade-offs
 
 ### Push vs Polling
 
--   Push = real-time but complex
--   Polling = simpler and scalable → chosen: hybrid approach
+* Push → real-time, complex
+* Polling → simpler, scalable
+* **Chosen:** Hybrid approach
 
-------------------------------------------------------------------------
+---
 
 ### Sync vs Async
 
--   Sync is simple but slow under load
--   Async improves performance and stability → chosen: async
-    architecture
+* Sync → simple but slow
+* Async → scalable and fast
+* **Chosen:** Async architecture
 
-------------------------------------------------------------------------
+---
 
-## Summary
+### Consistency Model
 
-The system is built to remain fast, modular, and fault-tolerant under
-high traffic.\
-By separating API, queue, and workers, it avoids bottlenecks and allows
-independent scaling of each component.
+| Type                 | Use Case           | Trade-off      |
+| -------------------- | ------------------ | -------------- |
+| Strong Consistency   | Security, payments | Higher latency |
+| Eventual Consistency | Likes, comments    | Temporary lag  |
 
-Even if traffic explodes, the queue absorbs pressure and keeps the
-system alive.
+**Final choice:** Hybrid model
 
-(Yes, queues are basically emotional support systems for backend
-services.)
+---
+
+## 🧾 Summary
+
+This system is designed to:
+
+* Handle massive scale without breaking
+* Keep APIs fast under heavy load
+* Isolate failures using queues and workers
+* Scale each component independently
+
+Even under extreme traffic spikes, the queue absorbs pressure and keeps the system stable.
+
+Because yes, queues are basically emotional support systems for backend architecture.
